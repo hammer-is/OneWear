@@ -26,3 +26,9 @@ BLE communication is based on work by @beeradmoore in [OWCE](https://github.com/
 
 ![Screenshot1](https://github.com/hammer-is/OneWear/blob/main/OWscreen1.png) ![Screenshot2](https://github.com/hammer-is/OneWear/blob/main/OWscreen2.png)
 
+## How to install on watch
+Enable "Developer Mode" on watch
+
+Install using "adb install C:\PathToFile\is.hammer.onewear-Signed.apk"
+
+(if you don't have ADB I recommend https://forum.xda-developers.com/ for install help)
