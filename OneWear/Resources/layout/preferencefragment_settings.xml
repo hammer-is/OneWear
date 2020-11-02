@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.preference.PreferenceScreen
+    xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto">
+
+	<Preference
+		android:key="boardScan"
+		android:title="Bluetooth scan"
+		android:summary="Click to populate wheels"/>
+
+	<ListPreference
+		android:key="boardMac"
+        android:title="Select wheel" 
+		app:useSimpleSummaryProvider="true"/>		
+	
+	<SwitchPreference
+        android:key="useMetric"
+		android:defaultValue="true"
+        android:title="Use Metric"/>
+	
+	<EditTextPreference             
+		android:key="tyreCircumference"             
+		android:title="Tyre circumference (mm)"
+		android:dialogTitle="Tyre circumference (mm)"
+		android:defaultValue="877"
+		app:useSimpleSummaryProvider="true"/> 
+
+	<SeekBarPreference
+		android:key="speedScale"
+		android:defaultValue="31"
+		app:showSeekBarValue="true"/>
+
+	<SwitchPreference
+        android:key="speedWarning"
+		android:defaultValue="true"		
+        android:title="Speed Warning"/>
+
+	<SeekBarPreference
+		android:key="speedWarningScale"
+		android:defaultValue="26"
+		app:showSeekBarValue="true"/>
+
+</androidx.preference.PreferenceScreen>
