@@ -86,11 +86,13 @@ namespace OneWear
                 status = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
             }
 
-            ((MainActivity)Platform.CurrentActivity).oWBLE.Disconnect();
-            _owbleScan.boards.Clear();
+            KeyValuePair<string, string>[] itemsToRemove = _owbleScan.boards.Where(b => b.Value != Prefs.BoardMac).ToArray(); //do not remove current "connected" board
+            foreach (KeyValuePair<string,string> item in itemsToRemove)
+                _owbleScan.boards.Remove(item.Key);
 
-            _boardMacPreference.Value = ""; //"Not set"
+            //_boardMacPreference.Value = ""; //"Not set" - should be combined with a "disconnect"
 
+            Toast.MakeText(Platform.CurrentActivity, "Scanning", ToastLength.Long).Show();
             await _owbleScan.StartScanning();
         }
 
@@ -109,7 +111,6 @@ namespace OneWear
 
             Prefs.BoardMacDictionary = _owbleScan.boards;
 
-            ((MainActivity)Platform.CurrentActivity).oWBLE.Disconnect();
             ((MainActivity)Platform.CurrentActivity).oWBLE.Connect(e.NewValue.ToString());
         }
 

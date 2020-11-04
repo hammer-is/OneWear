@@ -5,6 +5,7 @@ using Android.OS;
 using Android.Runtime;
 using Android.Widget;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Xamarin.Essentials;
 
@@ -15,14 +16,13 @@ namespace OneWear
     {
         private OWBLE_ScanCallback _scanCallback;
         private bool _isScanning = false;
-        private BluetoothAdapter _adapter;
+        private BluetoothManager _bluetoothManager;
         private BluetoothLeScanner _bleScanner;
         public SortedDictionary<string, string> boards;
 
         public OWBLEscan()
         {
-            BluetoothManager manager = Android.App.Application.Context.GetSystemService(Context.BluetoothService) as BluetoothManager;
-            _adapter = manager.Adapter;
+            _bluetoothManager = Platform.CurrentActivity.GetSystemService(Context.BluetoothService) as BluetoothManager;
             boards = new SortedDictionary<string, string>();
         }
 
@@ -31,13 +31,11 @@ namespace OneWear
             if (_isScanning)
                 return;
 
-            Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Scanning", ToastLength.Long).Show());
-
             _isScanning = true;
 
             // TODO: Handle power on state.
 
-            _bleScanner = _adapter.BluetoothLeScanner;
+            _bleScanner = _bluetoothManager.Adapter.BluetoothLeScanner;
             _scanCallback = new OWBLE_ScanCallback(this);
             var scanFilters = new List<ScanFilter>();
             var scanSettingsBuilder = new ScanSettings.Builder();
