@@ -22,7 +22,7 @@ namespace OneWear
 
         private System.Timers.Timer _idleTimer = null;
         private BluetoothGatt _bluetoothGatt = null;
-        private Queue<OWBLE_QueueItem> _gattOperationQueue = null;
+        private Queue<OWBLE_QueueItem> _gattOperationQueue = new Queue<OWBLE_QueueItem>();
         private bool _gattOperationQueueProcessing;
 
         Dictionary<string, BluetoothGattCharacteristic> _characteristics = new Dictionary<string, BluetoothGattCharacteristic>();
@@ -105,18 +105,28 @@ namespace OneWear
             if (service == null)
                 return;
 
+            //_characteristics needs to be rebuild on reconnect (TryAdd() is not enough as something is changing on the BluetoothGattCharacteristic on a new connection attempt and subscribe will fail)
             foreach (BluetoothGattCharacteristic characteristic in service.Characteristics)
                 _characteristics.Add(characteristic.Uuid.ToString().ToLower(), characteristic);
 
-            byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
-            if (hardwareRevision == null)
-                return;
-            _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
+            //foreach (string characteristic in _characteristicsToSubscribeTo) //not needed unless subscribing to 15 values!
+            //    await UnsubscribeValue(characteristic);
 
-            byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
-            if (firmwareRevision == null)
-                return;
-            _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
+            if (_hardwareRevision == 0)
+            { 
+                byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
+                if (hardwareRevision == null)
+                    return;
+                _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
+            }
+
+            if (_firmwareRevision == 0)
+            { 
+                byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
+                if (firmwareRevision == null)
+                    return;
+                _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
+            }
 
             if (_hardwareRevision >= 4210)
             {
@@ -135,12 +145,19 @@ namespace OneWear
 
             if (_hardwareRevision > 3000 && _firmwareRevision > 4000)
             {
-                await Handshake();
+                await Handshake(); //Subscribes 1 characteristic temporarily
 
-                _idleTimer = new System.Timers.Timer();
-                _idleTimer.Interval = 15000;
-                _idleTimer.Elapsed += new System.Timers.ElapsedEventHandler(PingTimer);
-                _idleTimer.Start();
+                if (_idleTimer == null)
+                {
+                    _idleTimer = new System.Timers.Timer();
+                    _idleTimer.Interval = 15000;
+                    _idleTimer.Elapsed += new System.Timers.ElapsedEventHandler(PingTimer);
+                    _idleTimer.Start();
+                }
+                else
+                {
+                    _idleTimer.Enabled = true;
+                }
             }
 
             foreach (string characteristic in _characteristicsToSubscribeTo)
@@ -166,9 +183,20 @@ namespace OneWear
                 //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Disconnected " + _name, ToastLength.Long).Show());
                 System.Diagnostics.Debug.WriteLine("Disconnected " + _name);
 
-                string address = gatt.Device.Address;
-                Disconnect();
-                Connect(address);
+                if (_idleTimer != null)
+                    _idleTimer.Enabled = false;
+                
+                _gattOperationQueue.Clear();
+
+                _characteristics.Clear();
+                _readQueue.Clear();
+                _writeQueue.Clear();
+                _subscribeQueue.Clear();
+                _unsubscribeQueue.Clear();
+                _notifyList.Clear();
+                _gattOperationQueueProcessing = false;
+
+                ((MainActivity)Platform.CurrentActivity).board.ClearValues();
             }
         }
 
@@ -373,9 +401,10 @@ namespace OneWear
         }
 
         public void Connect(string address)
-        {
-            _gattOperationQueue = new Queue<OWBLE_QueueItem>();
+        {            
             _gattOperationQueueProcessing = false;
+            _hardwareRevision = 0;
+            _firmwareRevision = 0;
 
             //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Connecting " + address, ToastLength.Long).Show());
 
@@ -397,11 +426,7 @@ namespace OneWear
                 _bluetoothGatt = null;
             }
 
-            if (_gattOperationQueue != null)
-            {
-                _gattOperationQueue.Clear();
-                _gattOperationQueue = null;
-            }
+            _gattOperationQueue.Clear();
 
             _characteristics.Clear();
             _readQueue.Clear();
@@ -409,6 +434,7 @@ namespace OneWear
             _subscribeQueue.Clear();
             _unsubscribeQueue.Clear();
             _notifyList.Clear();
+            _gattOperationQueueProcessing = false;
 
             ((MainActivity)Platform.CurrentActivity).board.ClearValues();
         }
