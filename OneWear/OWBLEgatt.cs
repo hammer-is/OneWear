@@ -435,7 +435,10 @@ namespace OneWear
             _firmwareRevision = 0;
 
             if (_bluetoothGatt != null) //is null on initial connect
+            {
+                Cleanup();
                 _bluetoothGatt.Close();
+            }
 
             _bluetoothDevice = _bluetoothManager.Adapter.GetRemoteDevice(address);
             _bluetoothGatt = _bluetoothDevice.ConnectGatt(Platform.CurrentActivity, true, this);
