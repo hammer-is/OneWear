@@ -6,8 +6,10 @@ using AndroidX.AppCompat.Widget;
 using AndroidX.Wear.Activity;
 using Java.Util.Concurrent;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xamarin.Essentials;
 
@@ -26,8 +28,7 @@ namespace OneWear
         private BluetoothManager _bluetoothManager = null;
         private BluetoothDevice _bluetoothDevice = null;
         private BluetoothGatt _bluetoothGatt = null;
-        private Queue<OWBLE_QueueItem> _gattOperationQueue = new Queue<OWBLE_QueueItem>();
-        private bool _gattOperationQueueProcessing;
+        private ConcurrentQueue<OWBLE_QueueItem> _gattOperationQueue = new ConcurrentQueue<OWBLE_QueueItem>(); //thread-safe
 
         private List<byte> _handshakeBuffer = null;
         private bool _isHandshaking = false;
@@ -106,6 +107,7 @@ namespace OneWear
             }
         }
 
+
         public override async void OnServicesDiscovered(BluetoothGatt gatt, GattStatus status)
         {
             BluetoothGattService service = gatt.GetService(ServiceUUID);
@@ -113,9 +115,12 @@ namespace OneWear
             if (service == null)
                 return;
 
-            //_characteristics needs to be rebuild on reconnect (TryAdd() is not enough as something is changing on the BluetoothGattCharacteristic on a new connection attempt and subscribe will fail)
-            foreach (BluetoothGattCharacteristic characteristic in service.Characteristics)
-                _characteristics.Add(characteristic.Uuid.ToString().ToLower(), characteristic);
+            lock(_characteristics)
+            { 
+                //_characteristics needs to be rebuild on reconnect (TryAdd() is not enough as something is changing on the BluetoothGattCharacteristic on a new connection attempt and subscribe will fail)
+                foreach (BluetoothGattCharacteristic characteristic in service.Characteristics)
+                    _characteristics.Add(characteristic.Uuid.ToString().ToLower(), characteristic);
+            }
 
             //foreach (string characteristic in _characteristicsToSubscribeTo) //not needed unless subscribing to 15 values!
             //    await UnsubscribeValue(characteristic);
@@ -165,18 +170,18 @@ namespace OneWear
 
             foreach (string characteristic in _characteristicsToSubscribeTo)
             {
-                try 
-                { 
+                try
+                {
                     await SubscribeValue(characteristic);
                 }
                 catch (TaskCanceledException) { return; };
             }
 
             foreach (string characteristic in _characteristicsToReadNow)
-            { 
-                try 
-                { 
-                    await ReadValue(characteristic); 
+            {
+                try
+                {
+                    await ReadValue(characteristic);
                 }
                 catch (TaskCanceledException) { return; };
             }
@@ -209,19 +214,13 @@ namespace OneWear
 
         private void ProcessQueue()
         {
-            int queueNumber = _queueNumber;
-            ++_queueNumber;
+            int queueNumber = Interlocked.Increment(ref _queueNumber); //thread-safe
 
             System.Diagnostics.Debug.WriteLine($"ProcessQueue {queueNumber}: {_gattOperationQueue.Count}");
-            if (_gattOperationQueue.Count == 0)
+
+            if (!_gattOperationQueue.TryDequeue(out OWBLE_QueueItem item))
                 return;
 
-            if (_gattOperationQueueProcessing)
-                return;
-
-            _gattOperationQueueProcessing = true;
-
-            OWBLE_QueueItem item = _gattOperationQueue.Dequeue();
             switch (item.OperationType)
             {
                 case OWBLE_QueueItemOperationType.Read:
@@ -295,7 +294,6 @@ namespace OneWear
                 }
             }
 
-            _gattOperationQueueProcessing = false;
             ProcessQueue();
         }
 
@@ -327,7 +325,6 @@ namespace OneWear
                 }
             }
 
-            _gattOperationQueueProcessing = false;
             ProcessQueue();
         }
 
@@ -414,14 +411,11 @@ namespace OneWear
                 System.Diagnostics.Debug.WriteLine($"OnDescriptorWrite Error: Unhandled descriptor of {descriptor.Uuid} on {uuid}.");
             }
 
-            _gattOperationQueueProcessing = false;
             ProcessQueue();
         }
 
         public void Connect(string address)
         {   
-            _gattOperationQueueProcessing = false;
-
             //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Connecting " + address, ToastLength.Long).Show());
 
             if ((_bluetoothGatt != null) && (_bluetoothGatt.Device.Address == address)) //Already connected (or wating for connect) - no need to .Close/ConnectGatt()
@@ -447,7 +441,7 @@ namespace OneWear
             _bluetoothGatt = _bluetoothDevice.ConnectGatt(Platform.CurrentActivity, true, this);
         }
 
-        public bool Connected()
+        public bool Connected() //TODO: I have observed one example where "scanning" and "connecting" resulted in this returning false without ProfileState.Disconnected beeing called in OnServicesDiscovered()
         {
             if (_bluetoothDevice == null)
                 return false;            
@@ -459,9 +453,13 @@ namespace OneWear
             _idleTimer.Enabled = false;
             _watchdogTimer.Enabled = false;
 
-            _characteristics.Clear();
-
             _handshakeTaskCompletionSource.TrySetCanceled();
+
+            lock(_characteristics)
+            {
+                _characteristics.Clear();
+            }
+
             lock (_readQueue)
             { 
                 foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _readQueue)
@@ -488,179 +486,158 @@ namespace OneWear
             }
 
             _gattOperationQueue.Clear();
-            _gattOperationQueueProcessing = false;
 
             ((MainActivity)Platform.CurrentActivity).board.ClearValues();
         }
 
-        public Task<byte[]> ReadValue(string characteristicGuid, bool important = false)
+        public Task<byte[]> ReadValue(string characteristicGuid)
         {
             System.Diagnostics.Debug.WriteLine($"ReadValue: {characteristicGuid}");
+
+            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
+
             if (_bluetoothGatt == null)
                 return null;
 
             string uuid = characteristicGuid.ToLower();
 
-            // TODO: Check for connected devices?
-            if (_characteristics.ContainsKey(uuid) == false)
-                throw new TaskCanceledException();
-
-            // Already awaiting it.
-            if (_readQueue.ContainsKey(uuid))
-            {
-                return _readQueue[uuid].Task;
-            }
-
-            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
-
-            lock(_readQueue)
+            lock(_characteristics)
             { 
-                if (important)
+                // TODO: Check for connected devices?
+                if (_characteristics.ContainsKey(uuid) == false)
+                    throw new TaskCanceledException();
+
+                // Already awaiting it.
+                if (_readQueue.ContainsKey(uuid))
                 {
-                    // TODO: Put this at the start of the queue.
+                    return _readQueue[uuid].Task;
+                }
+
+                lock(_readQueue)
+                { 
                     _readQueue.Add(uuid, taskCompletionSource);
                 }
-                else
-                {
-                    _readQueue.Add(uuid, taskCompletionSource);
-                }
+
+                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Read));
             }
-
-            _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Read));
-
             ProcessQueue();
 
             return taskCompletionSource.Task;
         }
 
-        public Task<byte[]> WriteValue(string characteristicGuid, byte[] data, bool important = false)
+        public Task<byte[]> WriteValue(string characteristicGuid, byte[] data)
         {
             System.Diagnostics.Debug.WriteLine($"WriteValue: {characteristicGuid}");
+
+            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
+            
             if (_bluetoothGatt == null)
                 return null;
 
-            if (data.Length > 20)
-            {
-                // TODO: Error, some Android BLE devices do not handle > 20byte packets well.
-                return null;
-            }
-
-            string uuid = characteristicGuid.ToLower();
-
-            // TODO: Check for connected devices?
-            if (_characteristics.ContainsKey(uuid) == false)
-                throw new TaskCanceledException();
-
-            // TODO: Handle this.
-            /*
-            if (_readQueue.ContainsKey(uuid))
-            {
-                return _readQueue[uuid].Task;
-            }
-            */
-
-            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
-
-            lock(_writeQueue)
+            lock(_characteristics)
             { 
-                if (important)
+                if (data.Length > 20)
                 {
-                    // TODO: Put this at the start of the queue.
+                    // TODO: Error, some Android BLE devices do not handle > 20byte packets well.
+                    return null;
+                }
+
+                string uuid = characteristicGuid.ToLower();
+
+                // TODO: Check for connected devices?
+                if (_characteristics.ContainsKey(uuid) == false)
+                    throw new TaskCanceledException();
+
+                // TODO: Handle this.
+                /*
+                if (_readQueue.ContainsKey(uuid))
+                {
+                    return _readQueue[uuid].Task;
+                }
+                */
+
+                lock(_writeQueue)
+                { 
                     _writeQueue.Add(uuid, taskCompletionSource);
                 }
-                else
-                {
-                    _writeQueue.TryAdd(uuid, taskCompletionSource);
-                }
-            }
 
-            byte[] dataBytes = null;
-            if (data != null)
-            {
-                dataBytes = new byte[data.Length];
-                Array.Copy(data, dataBytes, data.Length);
-
-                if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
-                       SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
+                byte[] dataBytes = null;
+                if (data != null)
                 {
-                    // If our system is little endian, reverse the array.
-                    if (BitConverter.IsLittleEndian && dataBytes != null)
+                    dataBytes = new byte[data.Length];
+                    Array.Copy(data, dataBytes, data.Length);
+
+                    if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
+                           SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
                     {
-                        Array.Reverse(dataBytes);
+                        // If our system is little endian, reverse the array.
+                        if (BitConverter.IsLittleEndian && dataBytes != null)
+                        {
+                            Array.Reverse(dataBytes);
+                        }
                     }
                 }
+
+                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Write, dataBytes));
             }
-
-            _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Write, dataBytes));
-
             ProcessQueue();
 
             return taskCompletionSource.Task;
         }
 
-        public Task SubscribeValue(string characteristicGuid, bool important = false)
+        public Task SubscribeValue(string characteristicGuid)
         {
             System.Diagnostics.Debug.WriteLine($"SubscribeValue: {characteristicGuid}");
+
+            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
+            
             if (_bluetoothGatt == null)
                 return null;
 
             string uuid = characteristicGuid.ToLower();
 
-            // TODO: Check for connected devices?
-            if (_characteristics.ContainsKey(uuid) == false)
-                throw new TaskCanceledException();
+            lock(_characteristics)
+            {
+                // TODO: Check for connected devices?
+                if (_characteristics.ContainsKey(uuid) == false)
+                    throw new TaskCanceledException();
 
-            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
-
-            lock(_subscribeQueue)
-            { 
-                if (important)
-                {
-                    // TODO: Put this at the start of the queue.
+                lock(_subscribeQueue)
+                { 
                     _subscribeQueue.Add(uuid, taskCompletionSource);
                 }
-                else
-                {
-                    _subscribeQueue.Add(uuid, taskCompletionSource);
-                }
+
+                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Subscribe));
             }
-
-            _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Subscribe));
-
             ProcessQueue();
 
             return taskCompletionSource.Task;
         }
 
-        public Task UnsubscribeValue(string characteristicGuid, bool important = false)
+        public Task UnsubscribeValue(string characteristicGuid)
         {
             System.Diagnostics.Debug.WriteLine($"UnsubscribeValue: {characteristicGuid}");
+
+            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
+
             if (_bluetoothGatt == null)
                 return null;
 
             string uuid = characteristicGuid.ToLower();
 
-            // TODO: Check for connected devices?
-            if (_characteristics.ContainsKey(uuid) == false)
-                throw new TaskCanceledException();
-
-            TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
-
-            lock(_unsubscribeQueue)
+            lock(_characteristics)
             { 
-                if (important)
-                {
-                    // TODO: Put this at the start of the queue.
+                // TODO: Check for connected devices?
+                if (_characteristics.ContainsKey(uuid) == false)
+                    throw new TaskCanceledException();
+
+                lock(_unsubscribeQueue)
+                { 
                     _unsubscribeQueue.Add(uuid, taskCompletionSource);
                 }
-                else
-                {
-                    _unsubscribeQueue.Add(uuid, taskCompletionSource);
-                }
+
+                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Unsubscribe));
             }
-
-            _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Unsubscribe));
-
             ProcessQueue();
 
             return taskCompletionSource.Task;
@@ -672,11 +649,11 @@ namespace OneWear
             {
                 System.Diagnostics.Debug.WriteLine("WatchdogTimer !_characteristicChanged");
                 Cleanup();
-                if (Connected())
+                if (Connected()) //unfortunately not very reliable... because it's very likely that it has just not discovered by Gatt that it's disconnected
                 {
                     System.Diagnostics.Debug.WriteLine("WatchdogTimer Connected()");
                     _watchdogTimer.Enabled = true;
-                    _bluetoothGatt.DiscoverServices(); //TODO: if not really "Connected" this might result in double call of OnServicesDiscovered and then _characteristics.Add() will fail the second time
+                    _bluetoothGatt.DiscoverServices(); //TODO: if not really "Connected" this might result in double call of OnServicesDiscovered() and then _characteristics.Add() will fail the second time
                 }
             }
             _characteristicChanged = false;
@@ -721,16 +698,16 @@ namespace OneWear
                     _handshakeTaskCompletionSource = new TaskCompletionSource<byte[]>();
                     _handshakeBuffer = new List<byte>();
 
-                    await SubscribeValue(SerialReadUUID, true);
+                    await SubscribeValue(SerialReadUUID);
 
                     // Data does not send until this is triggered. 
                     byte[] firmwareRevision = BitConverter.GetBytes((UInt16)_firmwareRevision);
 
-                    byte[] didWrite = await WriteValue(FirmwareRevisionUUID, firmwareRevision, true);
+                    byte[] didWrite = await WriteValue(FirmwareRevisionUUID, firmwareRevision);
 
                     byteArray = await _handshakeTaskCompletionSource.Task;
 
-                    await UnsubscribeValue(SerialReadUUID, true);
+                    await UnsubscribeValue(SerialReadUUID);
                 }
                 while (byteArray.Length != 20);
 
