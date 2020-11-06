@@ -375,6 +375,8 @@ namespace OneWear
             if (descriptor.Uuid.ToString().ToLower() == "00002902-0000-1000-8000-00805f9b34fb")
             {
                 byte[] descriptorValue = descriptor.GetValue();
+                if (descriptorValue == null)
+                    return; //TODO: This avoids an exception. But it does not Remove() from _subscribeQueue() / _unsubscribeQueue but likely only happens during Cleanup() so not a real issue
 
                 if (descriptorValue.SequenceEqual(BluetoothGattDescriptor.EnableNotificationValue.ToArray()))
                 {
@@ -422,7 +424,6 @@ namespace OneWear
             {                
                 if (Connected()) //refresh the connection (or should it just let the _watchdogTimer handle it...)
                 {
-                    //TODO: If below code is called quickly / while still doing previous connect there are still some situations that causes exceptions(crashes)...
                     Cleanup();
                     _watchdogTimer.Enabled = true;
                     _bluetoothGatt.DiscoverServices();
@@ -437,7 +438,11 @@ namespace OneWear
             if (_bluetoothGatt != null) //is null on initial connect
             {
                 Cleanup();
+                _bluetoothGatt.Disconnect(); //= cancelOpen() in log
                 _bluetoothGatt.Close();
+                // If connect is still in progress - the code in OnServicesDiscovered() - exceptions happen in Java code. Probably can also be triggered if IdleTimer is writing (but more difficult to hit). They seem harmleess.
+                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): Unhandled exception in callback
+                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): java.lang.NullPointerException: Attempt to invoke virtual method 'void android.bluetooth.BluetoothGattCallback.onCharacteristicChanged(android.bluetooth.BluetoothGatt, android.bluetooth.BluetoothGattCharacteristic)' on a null object reference
             }
 
             _bluetoothDevice = _bluetoothManager.Adapter.GetRemoteDevice(address);
@@ -456,7 +461,8 @@ namespace OneWear
             _idleTimer.Enabled = false;
             _watchdogTimer.Enabled = false;
 
-            _handshakeTaskCompletionSource.TrySetCanceled();
+            if (_handshakeTaskCompletionSource != null)
+                _handshakeTaskCompletionSource.TrySetCanceled();
 
             lock(_characteristics)
             {
@@ -559,7 +565,7 @@ namespace OneWear
                 }
                 */
 
-                lock(_writeQueue)
+                lock (_writeQueue)
                 { 
                     _writeQueue.Add(uuid, taskCompletionSource);
                 }
