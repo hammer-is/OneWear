@@ -1,10 +1,7 @@
 ﻿using Android.Bluetooth;
 using Android.Content;
 using Android.Runtime;
-using Android.Widget;
-using AndroidX.AppCompat.Widget;
 using AndroidX.Wear.Activity;
-using Java.Util.Concurrent;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -19,11 +16,12 @@ namespace OneWear
 
     public class OWBLEgatt : BluetoothGattCallback
     {
-        private string _name;
+        private string _name, _address;
         private int _firmwareRevision;
         private int _hardwareRevision;
-
         private System.Timers.Timer _idleTimer = null, _watchdogTimer = null;
+
+        private int _queueNumber = 0;
 
         private BluetoothManager _bluetoothManager = null;
         private BluetoothDevice _bluetoothDevice = null;
@@ -107,7 +105,6 @@ namespace OneWear
             }
         }
 
-
         public override async void OnServicesDiscovered(BluetoothGatt gatt, GattStatus status)
         {
             BluetoothGattService service = gatt.GetService(ServiceUUID);
@@ -125,29 +122,23 @@ namespace OneWear
             //foreach (string characteristic in _characteristicsToSubscribeTo) //not needed unless subscribing to 15 values!
             //    await UnsubscribeValue(characteristic);
 
-            if (_hardwareRevision == 0)
+            try
             {
-                try
-                {
-                    byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
-                    if (hardwareRevision == null)
-                        return;
-                    _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
-                }
-                catch (TaskCanceledException){ return; };
+                byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
+                if (hardwareRevision == null)
+                    return;
+                _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
             }
+            catch (TaskCanceledException){ return; };
 
-            if (_firmwareRevision == 0)
-            {
-                try
-                { 
-                    byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
-                    if (firmwareRevision == null)
-                        return;
-                    _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
-                }
-                catch (TaskCanceledException) { return; };
+            try
+            { 
+                byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
+                if (firmwareRevision == null)
+                    return;
+                _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
             }
+            catch (TaskCanceledException) { return; };
 
             if (_hardwareRevision >= 4210)
             {
@@ -193,24 +184,16 @@ namespace OneWear
             {
                 _name = gatt.Device.Name;
 
+                System.Diagnostics.Debug.WriteLine("Connected " + _name);
+
                 _characteristicChanged = false;
                 _watchdogTimer.Enabled = true;
 
-                //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Connected " + _name, ToastLength.Long).Show());
-                System.Diagnostics.Debug.WriteLine("Connected " + _name);
-
                 gatt.DiscoverServices();
             }
-            else if (newState == ProfileState.Disconnected)
-            {
-                //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Disconnected " + _name, ToastLength.Long).Show());
+            else if (newState == ProfileState.Disconnected) //Don't do anything. Let the watchdog handle disconnects.
                 System.Diagnostics.Debug.WriteLine("Disconnected " + _name);
-
-                Cleanup();
-            }
         }
-
-        private int _queueNumber = 0;
 
         private void ProcessQueue()
         {
@@ -417,86 +400,68 @@ namespace OneWear
         }
 
         public void Connect(string address)
-        {   
-            //Platform.CurrentActivity.RunOnUiThread(() => Toast.MakeText(Platform.CurrentActivity, "Connecting " + address, ToastLength.Long).Show());
+        {
+            Disconnect();
 
-            if ((_bluetoothGatt != null) && (_bluetoothGatt.Device.Address == address)) //Already connected (or wating for connect) - no need to .Close/ConnectGatt()
-            {                
-                if (Connected()) //refresh the connection (or should it just let the _watchdogTimer handle it...)
-                {
-                    Cleanup();
-                    _watchdogTimer.Enabled = true;
-                    _bluetoothGatt.DiscoverServices();
-                }
-
-                return;
-            }
+            _address = address;
 
             _hardwareRevision = 0;
             _firmwareRevision = 0;
-
-            if (_bluetoothGatt != null) //is null on initial connect
-            {
-                Cleanup();
-                _bluetoothGatt.Disconnect(); //= cancelOpen() in log
-                _bluetoothGatt.Close();
-                // If connect is still in progress - the code in OnServicesDiscovered() - exceptions happen in Java code. Probably can also be triggered if IdleTimer is writing (but more difficult to hit). They seem harmleess.
-                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): Unhandled exception in callback
-                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): java.lang.NullPointerException: Attempt to invoke virtual method 'void android.bluetooth.BluetoothGattCallback.onCharacteristicChanged(android.bluetooth.BluetoothGatt, android.bluetooth.BluetoothGattCharacteristic)' on a null object reference
-            }
 
             _bluetoothDevice = _bluetoothManager.Adapter.GetRemoteDevice(address);
             _bluetoothGatt = _bluetoothDevice.ConnectGatt(Platform.CurrentActivity, true, this);
         }
 
-        public bool Connected() //TODO: I have observed one example where "scanning" and "connecting" resulted in this returning false without ProfileState.Disconnected beeing called in OnServicesDiscovered()
+        public void Disconnect()
         {
-            if (_bluetoothDevice == null)
-                return false;            
-            return (_bluetoothManager.GetConnectionState(_bluetoothDevice, ProfileType.Gatt) == ProfileState.Connected);
-        }
-
-        private void Cleanup()
-        {
-            _idleTimer.Enabled = false;
-            _watchdogTimer.Enabled = false;
-
-            if (_handshakeTaskCompletionSource != null)
-                _handshakeTaskCompletionSource.TrySetCanceled();
-
-            lock(_characteristics)
+            if (_bluetoothGatt != null)
             {
-                _characteristics.Clear();
-            }
+                _idleTimer.Enabled = false;
+                _watchdogTimer.Enabled = false;
 
-            lock (_readQueue)
-            { 
-                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _readQueue)
-                    tcs.Value.TrySetCanceled();
-                _readQueue.Clear();
-            }
-            lock(_writeQueue)
-            { 
-                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _writeQueue)
-                    tcs.Value.TrySetCanceled();
-                _writeQueue.Clear();
-            }
-            lock(_subscribeQueue)
-            { 
-                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _subscribeQueue)
-                    tcs.Value.TrySetCanceled();
-                _subscribeQueue.Clear();
-            }
-            lock(_unsubscribeQueue)
-            { 
-                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _unsubscribeQueue)
-                    tcs.Value.TrySetCanceled();
-                _unsubscribeQueue.Clear();
-            }
+                if (_handshakeTaskCompletionSource != null)
+                    _handshakeTaskCompletionSource.TrySetCanceled();
 
-            _gattOperationQueue.Clear();
+                lock (_characteristics)
+                {
+                    _characteristics.Clear();
+                }
 
-            ((MainActivity)Platform.CurrentActivity).board.ClearValues();
+                lock (_readQueue)
+                {
+                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _readQueue)
+                        tcs.Value.TrySetCanceled();
+                    _readQueue.Clear();
+                }
+                lock (_writeQueue)
+                {
+                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _writeQueue)
+                        tcs.Value.TrySetCanceled();
+                    _writeQueue.Clear();
+                }
+                lock (_subscribeQueue)
+                {
+                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _subscribeQueue)
+                        tcs.Value.TrySetCanceled();
+                    _subscribeQueue.Clear();
+                }
+                lock (_unsubscribeQueue)
+                {
+                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _unsubscribeQueue)
+                        tcs.Value.TrySetCanceled();
+                    _unsubscribeQueue.Clear();
+                }
+
+                _gattOperationQueue.Clear();
+
+                ((MainActivity)Platform.CurrentActivity).board.ClearValues();
+
+                //_bluetoothGatt.Disconnect(); //= cancelOpen() in log. Sometimes! triggers OnConnectionStateChange() ProfileState.Disconnected
+                _bluetoothGatt.Close();
+                // If connect is still in progress (code executed in OnServicesDiscovered() ) - exceptions occur in Java code. Probably can also be triggered if IdleTimer is writing (but more difficult to hit). They seem harmleess.
+                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): Unhandled exception in callback
+                // 11-06 12:49:24.993 W/BluetoothGatt( 3243): java.lang.NullPointerException: Attempt to invoke virtual method 'void android.bluetooth.BluetoothGattCallback.onCharacteristicChanged(android.bluetooth.BluetoothGatt, android.bluetooth.BluetoothGattCharacteristic)' on a null object reference
+            }
         }
 
         public Task<byte[]> ReadValue(string characteristicGuid)
@@ -504,9 +469,6 @@ namespace OneWear
             System.Diagnostics.Debug.WriteLine($"ReadValue: {characteristicGuid}");
 
             TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
-
-            if (_bluetoothGatt == null)
-                return null;
 
             string uuid = characteristicGuid.ToLower();
 
@@ -540,9 +502,6 @@ namespace OneWear
 
             TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
             
-            if (_bluetoothGatt == null)
-                return null;
-
             lock(_characteristics)
             { 
                 if (data.Length > 20)
@@ -600,9 +559,6 @@ namespace OneWear
 
             TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
             
-            if (_bluetoothGatt == null)
-                return null;
-
             string uuid = characteristicGuid.ToLower();
 
             lock(_characteristics)
@@ -629,9 +585,6 @@ namespace OneWear
 
             TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
 
-            if (_bluetoothGatt == null)
-                return null;
-
             string uuid = characteristicGuid.ToLower();
 
             lock(_characteristics)
@@ -653,34 +606,34 @@ namespace OneWear
         }
 
         protected void WatchdogTimer(object sender, System.Timers.ElapsedEventArgs e)
-        {
-            if (!_characteristicChanged) //broken communication? NOTE/TODO: This only catches if there are "blocked" SubscribeValue - not Read+WriteValue!
-            {
+        {             
+            if (!_characteristicChanged) //broken communication due to disconnect or other issue. 
+            {    //NOTE/TODO: This only detects if there are "blocked" SubscribeValue - not ReadValue+WriteValue
+
+                /*  This continues to trigger untill Android senses the disconnect.
+                 
+                    [0:] WatchdogTimer !_characteristicChanged
+                    [0:] Connected owXXXXXX
+                    [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
+                    [0:] ProcessQueue 23: 1
+                    [0:] WatchdogTimer !_characteristicChanged
+                    [0:] Connected owXXXXXX
+                    [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
+                    [0:] ProcessQueue 24: 1
+                    [0:] ProcessQueue 25: 0
+                    [0:] Disconnected owXXXXXX
+                    [0:] WatchdogTimer !_characteristicChanged 
+                */
                 System.Diagnostics.Debug.WriteLine("WatchdogTimer !_characteristicChanged");
-                Cleanup();
-                if (Connected()) //unfortunately not very reliable... because it's very likely that it has just not discovered by Gatt that it's disconnected
-                {
-                    System.Diagnostics.Debug.WriteLine("WatchdogTimer Connected()");
-                    _watchdogTimer.Enabled = true;
-                    _bluetoothGatt.DiscoverServices(); //TODO: if not really "Connected" this might result in double call of OnServicesDiscovered() and then _characteristics.Add() will fail the second time
-                }
+                Connect(_address);
             }
             _characteristicChanged = false;
         }
 
         protected void IdleTimer(object sender, System.Timers.ElapsedEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine("IdleTimer");
-            try
-            {
-                byte[] firmwareRevision = BitConverter.GetBytes((UInt16)_firmwareRevision);
-                WriteValue(FirmwareRevisionUUID, firmwareRevision); //note that we do NOT await!
-            }
-            catch (Exception err)
-            {
-                // TODO: Couldnt update firmware revision.
-                System.Diagnostics.Debug.WriteLine("ERROR: " + err.Message);
-            }
+            byte[] firmwareRevision = BitConverter.GetBytes((UInt16)_firmwareRevision);
+            WriteValue(FirmwareRevisionUUID, firmwareRevision); //note that we do NOT await!
         }
 
         public OWBLEgatt()
@@ -692,7 +645,7 @@ namespace OneWear
             _idleTimer.Elapsed += new System.Timers.ElapsedEventHandler(IdleTimer);
 
             _watchdogTimer = new System.Timers.Timer();
-            _watchdogTimer.Interval = 5000;
+            _watchdogTimer.Interval = 2500; //Seems to work even as low as 1000
             _watchdogTimer.Elapsed += new System.Timers.ElapsedEventHandler(WatchdogTimer);
         }
 

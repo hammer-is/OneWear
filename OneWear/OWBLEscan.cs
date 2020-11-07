@@ -79,7 +79,10 @@ namespace OneWear
         public override void OnScanResult(ScanCallbackType callbackType, ScanResult result)
         {
             System.Diagnostics.Debug.WriteLine("OnScanResult");
-            _owble.boards.TryAdd(result.Device.Name, result.Device.Address);
+            lock (_owble.boards)
+            { 
+                _owble.boards.TryAdd(result.Device.Name, result.Device.Address);
+            }
         }
 
         public override void OnScanFailed([GeneratedEnum] ScanFailure errorCode)
