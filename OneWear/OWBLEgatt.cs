@@ -125,7 +125,7 @@ namespace OneWear
             try
             {
                 byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
-                if (hardwareRevision == null)
+                if (hardwareRevision.Length == 0)
                     return;
                 _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
             }
@@ -134,7 +134,7 @@ namespace OneWear
             try
             { 
                 byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
-                if (firmwareRevision == null)
+                if (firmwareRevision.Length == 0)
                     return;
                 _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
             }
