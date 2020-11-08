@@ -6,7 +6,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Xamarin.Essentials;
 
@@ -21,31 +20,20 @@ namespace OneWear
         private int _hardwareRevision;
         private System.Timers.Timer _idleTimer = null, _watchdogTimer = null;
 
-        private int _queueNumber = 0;
-
         private BluetoothManager _bluetoothManager = null;
         private BluetoothDevice _bluetoothDevice = null;
         private BluetoothGatt _bluetoothGatt = null;
-        private ConcurrentQueue<OWBLE_QueueItem> _gattOperationQueue = new ConcurrentQueue<OWBLE_QueueItem>(); //thread-safe
 
         private List<byte> _handshakeBuffer = null;
         private bool _isHandshaking = false;
         private TaskCompletionSource<byte[]> _handshakeTaskCompletionSource = null;
 
-        Dictionary<string, BluetoothGattCharacteristic> _characteristics = new Dictionary<string, BluetoothGattCharacteristic>();
+        ConcurrentDictionary<string, BluetoothGattCharacteristic> _characteristics = new ConcurrentDictionary<string, BluetoothGattCharacteristic>();
         private bool _characteristicChanged;
-        Dictionary<string, TaskCompletionSource<byte[]>> _readQueue = new Dictionary<string, TaskCompletionSource<byte[]>>();
-        Dictionary<string, TaskCompletionSource<byte[]>> _writeQueue = new Dictionary<string, TaskCompletionSource<byte[]>>();
-        Dictionary<string, TaskCompletionSource<byte[]>> _subscribeQueue = new Dictionary<string, TaskCompletionSource<byte[]>>();
-        Dictionary<string, TaskCompletionSource<byte[]>> _unsubscribeQueue = new Dictionary<string, TaskCompletionSource<byte[]>>();
-
-        private enum OWBLE_QueueItemOperationType
-        {
-            Read,
-            Write,
-            Subscribe,
-            Unsubscribe,
-        }
+        ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _readQueue = new ConcurrentDictionary<string, TaskCompletionSource<byte[]>>();
+        ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _writeQueue = new ConcurrentDictionary<string, TaskCompletionSource<byte[]>>();
+        ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _subscribeQueue = new ConcurrentDictionary<string, TaskCompletionSource<byte[]>>();
+        ConcurrentDictionary<string, TaskCompletionSource<byte[]>> _unsubscribeQueue = new ConcurrentDictionary<string, TaskCompletionSource<byte[]>>();
 
         private List<string> _characteristicsToReadNow = new List<string>()
         {
@@ -91,20 +79,6 @@ namespace OneWear
             LifetimeAmpHoursUUID,*/
         };
 
-        private class OWBLE_QueueItem
-        {
-            public OWBLE_QueueItemOperationType OperationType { get; private set; }
-            public BluetoothGattCharacteristic Characteristic { get; private set; }
-            public byte[] Data { get; set; }
-
-            public OWBLE_QueueItem(BluetoothGattCharacteristic characteristic, OWBLE_QueueItemOperationType operationType, byte[] data = null)
-            {
-                Characteristic = characteristic;
-                OperationType = operationType;
-                Data = data;
-            }
-        }
-
         public override async void OnServicesDiscovered(BluetoothGatt gatt, GattStatus status)
         {
             BluetoothGattService service = gatt.GetService(ServiceUUID);
@@ -112,12 +86,9 @@ namespace OneWear
             if (service == null)
                 return;
 
-            lock(_characteristics)
-            { 
-                //_characteristics needs to be rebuild on reconnect (TryAdd() is not enough as something is changing on the BluetoothGattCharacteristic on a new connection attempt and subscribe will fail)
-                foreach (BluetoothGattCharacteristic characteristic in service.Characteristics)
-                    _characteristics.Add(characteristic.Uuid.ToString().ToLower(), characteristic);
-            }
+            //_characteristics needs to be rebuild on reconnect (TryAdd() is not enough as something is changing on the BluetoothGattCharacteristic on a new connection attempt and subscribe will fail)
+            foreach (BluetoothGattCharacteristic characteristic in service.Characteristics)
+                _characteristics.TryAdd(characteristic.Uuid.ToString().ToLower(), characteristic);
 
             //foreach (string characteristic in _characteristicsToSubscribeTo) //not needed unless subscribing to 15 values!
             //    await UnsubscribeValue(characteristic);
@@ -125,7 +96,7 @@ namespace OneWear
             try
             {
                 byte[] hardwareRevision = await ReadValue(HardwareRevisionUUID);
-                if (hardwareRevision.Length == 0)
+                if ((hardwareRevision == null) || (hardwareRevision.Length == 0))
                     return;
                 _hardwareRevision = BitConverter.ToUInt16(hardwareRevision, 0);
             }
@@ -134,7 +105,7 @@ namespace OneWear
             try
             { 
                 byte[] firmwareRevision = await ReadValue(FirmwareRevisionUUID);
-                if (firmwareRevision.Length == 0)
+                if ((firmwareRevision == null) || (firmwareRevision.Length == 0))
                     return;
                 _firmwareRevision = BitConverter.ToUInt16(firmwareRevision, 0);
             }
@@ -195,122 +166,46 @@ namespace OneWear
                 System.Diagnostics.Debug.WriteLine("Disconnected " + _name);
         }
 
-        private void ProcessQueue()
-        {
-            int queueNumber = Interlocked.Increment(ref _queueNumber); //thread-safe
-
-            System.Diagnostics.Debug.WriteLine($"ProcessQueue {queueNumber}: {_gattOperationQueue.Count}");
-
-            if (!_gattOperationQueue.TryDequeue(out OWBLE_QueueItem item))
-                return;
-
-            switch (item.OperationType)
-            {
-                case OWBLE_QueueItemOperationType.Read:
-                    bool didRead = _bluetoothGatt.ReadCharacteristic(item.Characteristic);
-                    if (didRead == false)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR {queueNumber}: Unable to read {item.Characteristic.Uuid}");
-                    }
-                    break;
-
-                case OWBLE_QueueItemOperationType.Write:
-                    bool didSetValue = item.Characteristic.SetValue(item.Data);
-                    bool didWrite = _bluetoothGatt.WriteCharacteristic(item.Characteristic);
-                    if (didWrite == false)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR {queueNumber}: Unable to write {item.Characteristic.Uuid}");
-                    }
-                    break;
-
-                case OWBLE_QueueItemOperationType.Subscribe:
-                    bool didSubscribe = _bluetoothGatt.SetCharacteristicNotification(item.Characteristic, true);
-                    if (didSubscribe == false)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR {queueNumber}: Unable to subscribe {item.Characteristic.Uuid}");
-                    }
-
-                    BluetoothGattDescriptor subscribeDescriptor = item.Characteristic.GetDescriptor(ConfigUUID);
-                    bool didSetSubscribeDescriptor = subscribeDescriptor.SetValue(BluetoothGattDescriptor.EnableNotificationValue.ToArray());
-                    bool didWriteSubscribeDescriptor = _bluetoothGatt.WriteDescriptor(subscribeDescriptor);
-                    break;
-
-                case OWBLE_QueueItemOperationType.Unsubscribe:
-                    bool didUnsubscribe = _bluetoothGatt.SetCharacteristicNotification(item.Characteristic, false);
-                    if (didUnsubscribe == false)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ERROR {queueNumber}: Unable to unsubscribe {item.Characteristic.Uuid}");
-                    }
-
-                    BluetoothGattDescriptor unsubscribeDescriptor = item.Characteristic.GetDescriptor(ConfigUUID);
-                    bool didSetUnsubscribeDescriptor = unsubscribeDescriptor.SetValue(BluetoothGattDescriptor.DisableNotificationValue.ToArray());
-                    bool didWriteUnsubscribeDescriptor = _bluetoothGatt.WriteDescriptor(unsubscribeDescriptor);
-                    break;
-            }
-        }
-
         public override void OnCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, GattStatus status)
         {
             string uuid = characteristic.Uuid.ToString().ToLower();
 
-            lock (_readQueue)
+            if (_readQueue.TryRemove(uuid, out TaskCompletionSource<byte[]> readItem))
             {
-                if (_readQueue.ContainsKey(uuid))
+                byte[] dataBytes = characteristic.GetValue();
+
+                if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
+                    SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
                 {
-                    TaskCompletionSource<byte[]> readItem = _readQueue[uuid];
-                    _readQueue.Remove(uuid);
-
-                    byte[] dataBytes = characteristic.GetValue();
-
-                    if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
-                        SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
-                    {
-                        // If our system is little endian, reverse the array.
-                        if (BitConverter.IsLittleEndian && dataBytes != null)
-                        {
-                            Array.Reverse(dataBytes);
-                        }
-                    }
-
-                    readItem.TrySetResult(dataBytes);
-                    ((MainActivity)Platform.CurrentActivity).board.ValueChanged(uuid, dataBytes);
+                    // If our system is little endian, reverse the array.
+                    if (BitConverter.IsLittleEndian && dataBytes != null)
+                        Array.Reverse(dataBytes);
                 }
-            }
 
-            ProcessQueue();
+                readItem.TrySetResult(dataBytes);
+                ((MainActivity)Platform.CurrentActivity).board.ValueChanged(uuid, dataBytes);
+            }
         }
 
         public override void OnCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, GattStatus status)
         {
             string uuid = characteristic.Uuid.ToString().ToLower();
 
-            lock (_writeQueue)
+            if (_writeQueue.TryRemove(uuid, out TaskCompletionSource<byte[]> writeItem))
             {
+                byte[] dataBytes = characteristic.GetValue();
 
-                if (_writeQueue.ContainsKey(uuid))
+                if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
+                    SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
                 {
-                    TaskCompletionSource<byte[]> writeItem = _writeQueue[uuid];
-                    _writeQueue.Remove(uuid);
-
-                    byte[] dataBytes = characteristic.GetValue();
-
-                    if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
-                        SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
-                    {
-                        // If our system is little endian, reverse the array.
-                        if (BitConverter.IsLittleEndian && dataBytes != null)
-                        {
-                            Array.Reverse(dataBytes);
-                        }
-                    }
-
-                    writeItem.TrySetResult(dataBytes);
+                    // If our system is little endian, reverse the array.
+                    if (BitConverter.IsLittleEndian && dataBytes != null)
+                        Array.Reverse(dataBytes);
                 }
+
+                writeItem.TrySetResult(dataBytes);
             }
-
-            ProcessQueue();
         }
-
 
         public override void OnCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic)
         {
@@ -329,7 +224,7 @@ namespace OneWear
                     Array.Reverse(dataBytes);
                 }
             }
-            else if (_isHandshaking && uuid.Equals(SerialReadUUID, StringComparison.CurrentCultureIgnoreCase))
+            else if (_isHandshaking && uuid.Equals(SerialReadUUID, StringComparison.CurrentCultureIgnoreCase) && dataBytes != null)
             {
                 _handshakeBuffer.AddRange(dataBytes);
                 if (_handshakeBuffer.Count >= 20) // it seems to become >20 if handshake goes wrong (happening to soon?)
@@ -363,28 +258,13 @@ namespace OneWear
 
                 if (descriptorValue.SequenceEqual(BluetoothGattDescriptor.EnableNotificationValue.ToArray()))
                 {
-                    lock (_subscribeQueue)
-                    {
-
-                        if (_subscribeQueue.ContainsKey(uuid))
-                        {
-                            TaskCompletionSource<byte[]> subscribeItem = _subscribeQueue[uuid];
-                            _subscribeQueue.Remove(uuid);
-                            subscribeItem.TrySetResult(descriptorValue);
-                        }
-                    }
+                    if (_subscribeQueue.TryRemove(uuid, out TaskCompletionSource<byte[]> subscribeItem))
+                        subscribeItem.TrySetResult(descriptorValue);
                 }
                 else if (descriptorValue.SequenceEqual(BluetoothGattDescriptor.DisableNotificationValue.ToArray()))
                 {
-                    lock (_subscribeQueue)
-                    {
-                        if (_unsubscribeQueue.ContainsKey(uuid))
-                        {
-                            TaskCompletionSource<byte[]> unsubscribeItem = _unsubscribeQueue[uuid];
-                            _unsubscribeQueue.Remove(uuid);
-                            unsubscribeItem.TrySetResult(descriptorValue);
-                        }
-                    }
+                    if (_unsubscribeQueue.TryRemove(uuid, out TaskCompletionSource<byte[]> unsubscribeItem))
+                        unsubscribeItem.TrySetResult(descriptorValue);
                 }
                 else
                 {
@@ -395,8 +275,6 @@ namespace OneWear
             {
                 System.Diagnostics.Debug.WriteLine($"OnDescriptorWrite Error: Unhandled descriptor of {descriptor.Uuid} on {uuid}.");
             }
-
-            ProcessQueue();
         }
 
         public void Connect(string address)
@@ -422,37 +300,23 @@ namespace OneWear
                 if (_handshakeTaskCompletionSource != null)
                     _handshakeTaskCompletionSource.TrySetCanceled();
 
-                lock (_characteristics)
-                {
-                    _characteristics.Clear();
-                }
+                _characteristics.Clear();
 
-                lock (_readQueue)
-                {
-                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _readQueue)
-                        tcs.Value.TrySetCanceled();
-                    _readQueue.Clear();
-                }
-                lock (_writeQueue)
-                {
-                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _writeQueue)
-                        tcs.Value.TrySetCanceled();
-                    _writeQueue.Clear();
-                }
-                lock (_subscribeQueue)
-                {
-                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _subscribeQueue)
-                        tcs.Value.TrySetCanceled();
-                    _subscribeQueue.Clear();
-                }
-                lock (_unsubscribeQueue)
-                {
-                    foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _unsubscribeQueue)
-                        tcs.Value.TrySetCanceled();
-                    _unsubscribeQueue.Clear();
-                }
+                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _readQueue) //ConcurrentDictionary ensures thread-safe enummeration
+                    tcs.Value.TrySetCanceled(); //TODO: Not sure if this is thread-safe! What happens if .TryRemove() right before this...
+                _readQueue.Clear();
 
-                _gattOperationQueue.Clear();
+                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _writeQueue)
+                    tcs.Value.TrySetCanceled();
+                _writeQueue.Clear();
+
+                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _subscribeQueue)
+                    tcs.Value.TrySetCanceled();
+                _subscribeQueue.Clear();
+
+                foreach (KeyValuePair<string, TaskCompletionSource<byte[]>> tcs in _unsubscribeQueue)
+                    tcs.Value.TrySetCanceled();
+                _unsubscribeQueue.Clear();
 
                 ((MainActivity)Platform.CurrentActivity).board.ClearValues();
 
@@ -472,26 +336,18 @@ namespace OneWear
 
             string uuid = characteristicGuid.ToLower();
 
-            lock(_characteristics)
-            { 
-                // TODO: Check for connected devices?
-                if (_characteristics.ContainsKey(uuid) == false)
-                    throw new TaskCanceledException();
+            // TODO: Check for connected devices?
+            if (!_characteristics.TryGetValue(uuid, out BluetoothGattCharacteristic characteristic))
+                throw new TaskCanceledException();
 
-                // Already awaiting it.
-                if (_readQueue.ContainsKey(uuid))
-                {
-                    return _readQueue[uuid].Task;
-                }
+            // Already awaiting it.
+            if (_readQueue.TryGetValue(uuid, out TaskCompletionSource<byte[]> awaiting))
+                return awaiting.Task;
 
-                lock(_readQueue)
-                { 
-                    _readQueue.Add(uuid, taskCompletionSource);
-                }
+            _readQueue.TryAdd(uuid, taskCompletionSource);
 
-                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Read));
-            }
-            ProcessQueue();
+            if (!_bluetoothGatt.ReadCharacteristic(characteristic))
+                System.Diagnostics.Debug.WriteLine($"ERROR: Unable to read {uuid}");
 
             return taskCompletionSource.Task;
         }
@@ -502,53 +358,28 @@ namespace OneWear
 
             TaskCompletionSource<byte[]> taskCompletionSource = new TaskCompletionSource<byte[]>();
             
-            lock(_characteristics)
-            { 
-                if (data.Length > 20)
-                {
-                    // TODO: Error, some Android BLE devices do not handle > 20byte packets well.
-                    return null;
-                }
+            string uuid = characteristicGuid.ToLower();
 
-                string uuid = characteristicGuid.ToLower();
+            // TODO: Check for connected devices?
+            if (!_characteristics.TryGetValue(uuid, out BluetoothGattCharacteristic characteristic))
+                throw new TaskCanceledException();
 
-                // TODO: Check for connected devices?
-                if (_characteristics.ContainsKey(uuid) == false)
-                    throw new TaskCanceledException();
+            _writeQueue.TryAdd(uuid, taskCompletionSource);
 
-                // TODO: Handle this.
-                /*
-                if (_readQueue.ContainsKey(uuid))
-                {
-                    return _readQueue[uuid].Task;
-                }
-                */
+            byte[] dataBytes = new byte[data.Length];
+            Array.Copy(data, dataBytes, data.Length);
 
-                lock (_writeQueue)
-                { 
-                    _writeQueue.Add(uuid, taskCompletionSource);
-                }
-
-                byte[] dataBytes = null;
-                if (data != null)
-                {
-                    dataBytes = new byte[data.Length];
-                    Array.Copy(data, dataBytes, data.Length);
-
-                    if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
-                           SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
-                    {
-                        // If our system is little endian, reverse the array.
-                        if (BitConverter.IsLittleEndian && dataBytes != null)
-                        {
-                            Array.Reverse(dataBytes);
-                        }
-                    }
-                }
-
-                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Write, dataBytes));
+            if (SerialWriteUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false &&
+                    SerialReadUUID.Equals(uuid, StringComparison.InvariantCultureIgnoreCase) == false)
+            {
+                // If our system is little endian, reverse the array.
+                if (BitConverter.IsLittleEndian && dataBytes != null)
+                    Array.Reverse(dataBytes);
             }
-            ProcessQueue();
+
+            bool didSetValue = characteristic.SetValue(dataBytes);
+            if (!_bluetoothGatt.WriteCharacteristic(characteristic))
+                System.Diagnostics.Debug.WriteLine($"ERROR: Unable to write {uuid}");
 
             return taskCompletionSource.Task;
         }
@@ -561,20 +392,18 @@ namespace OneWear
             
             string uuid = characteristicGuid.ToLower();
 
-            lock(_characteristics)
-            {
-                // TODO: Check for connected devices?
-                if (_characteristics.ContainsKey(uuid) == false)
-                    throw new TaskCanceledException();
+            // TODO: Check for connected devices?
+            if (!_characteristics.TryGetValue(uuid, out BluetoothGattCharacteristic characteristic))
+                throw new TaskCanceledException();
 
-                lock(_subscribeQueue)
-                { 
-                    _subscribeQueue.Add(uuid, taskCompletionSource);
-                }
+            _subscribeQueue.TryAdd(uuid, taskCompletionSource);
 
-                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Subscribe));
-            }
-            ProcessQueue();
+            if (!_bluetoothGatt.SetCharacteristicNotification(characteristic, true))
+                System.Diagnostics.Debug.WriteLine($"ERROR: Unable to subscribe {uuid}");
+
+            BluetoothGattDescriptor subscribeDescriptor = characteristic.GetDescriptor(ConfigUUID);
+            bool didSetSubscribeDescriptor = subscribeDescriptor.SetValue(BluetoothGattDescriptor.EnableNotificationValue.ToArray());
+            bool didWriteSubscribeDescriptor = _bluetoothGatt.WriteDescriptor(subscribeDescriptor);
 
             return taskCompletionSource.Task;
         }
@@ -587,20 +416,18 @@ namespace OneWear
 
             string uuid = characteristicGuid.ToLower();
 
-            lock(_characteristics)
-            { 
-                // TODO: Check for connected devices?
-                if (_characteristics.ContainsKey(uuid) == false)
-                    throw new TaskCanceledException();
+            // TODO: Check for connected devices?
+            if (!_characteristics.TryGetValue(uuid, out BluetoothGattCharacteristic characteristic))
+                throw new TaskCanceledException();
 
-                lock(_unsubscribeQueue)
-                { 
-                    _unsubscribeQueue.Add(uuid, taskCompletionSource);
-                }
+            _unsubscribeQueue.TryAdd(uuid, taskCompletionSource);
 
-                _gattOperationQueue.Enqueue(new OWBLE_QueueItem(_characteristics[uuid], OWBLE_QueueItemOperationType.Unsubscribe));
-            }
-            ProcessQueue();
+            if (!_bluetoothGatt.SetCharacteristicNotification(characteristic, false))
+                System.Diagnostics.Debug.WriteLine($"ERROR: Unable to unsubscribe {uuid}");
+
+            BluetoothGattDescriptor unsubscribeDescriptor = characteristic.GetDescriptor(ConfigUUID);
+            bool didSetUnsubscribeDescriptor = unsubscribeDescriptor.SetValue(BluetoothGattDescriptor.DisableNotificationValue.ToArray());
+            bool didWriteUnsubscribeDescriptor = _bluetoothGatt.WriteDescriptor(unsubscribeDescriptor);
 
             return taskCompletionSource.Task;
         }
@@ -610,17 +437,14 @@ namespace OneWear
             if (!_characteristicChanged) //broken communication due to disconnect or other issue. 
             {    //NOTE/TODO: This only detects if there are "blocked" SubscribeValue - not ReadValue+WriteValue
 
-                /*  This continues to trigger untill Android senses the disconnect.
+                /*  This continues to trigger until Android senses the disconnect.
                  
                     [0:] WatchdogTimer !_characteristicChanged
                     [0:] Connected owXXXXXX
                     [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
-                    [0:] ProcessQueue 23: 1
                     [0:] WatchdogTimer !_characteristicChanged
                     [0:] Connected owXXXXXX
                     [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
-                    [0:] ProcessQueue 24: 1
-                    [0:] ProcessQueue 25: 0
                     [0:] Disconnected owXXXXXX
                     [0:] WatchdogTimer !_characteristicChanged 
                 */
@@ -645,7 +469,7 @@ namespace OneWear
             _idleTimer.Elapsed += new System.Timers.ElapsedEventHandler(IdleTimer);
 
             _watchdogTimer = new System.Timers.Timer();
-            _watchdogTimer.Interval = 2500; //Seems to work even as low as 1000
+            _watchdogTimer.Interval = 5000; //Seems to work even as low as 1000
             _watchdogTimer.Elapsed += new System.Timers.ElapsedEventHandler(WatchdogTimer);
         }
 
