@@ -99,6 +99,7 @@ namespace OneWear
 
         protected override void OnDestroy()
         {
+            oWBLE.Disconnect();
             base.OnDestroy();
         }
 
