@@ -86,11 +86,14 @@ namespace OneWear
                 status = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
             }
 
+            lock (_owbleScan.boards)
+            { 
+                _owbleScan.boards.Clear();
+                _boardMacPreference.Value = ""; //"Not set"
+            }
             ((MainActivity)Platform.CurrentActivity).oWBLE.Disconnect();
-            _owbleScan.boards.Clear();
 
-            _boardMacPreference.Value = ""; //"Not set"
-
+            Toast.MakeText(Platform.CurrentActivity, "Scanning", ToastLength.Long).Show();
             await _owbleScan.StartScanning();
         }
 
@@ -107,27 +110,21 @@ namespace OneWear
                 return;
             }
 
-            Prefs.BoardMacDictionary = _owbleScan.boards;
+            lock (_owbleScan.boards)
+            { 
+                Prefs.BoardMacDictionary = _owbleScan.boards;
+            }
 
-            ((MainActivity)Platform.CurrentActivity).oWBLE.Disconnect();
             ((MainActivity)Platform.CurrentActivity).oWBLE.Connect(e.NewValue.ToString());
         }
 
         private void BoardMacPreference_Populate()
         {
-            string[] name = new string[_owbleScan.boards.Count()];
-            string[] address = new string[_owbleScan.boards.Count()];
-            int i = 0;
-
-            foreach (KeyValuePair<string, string> kvp in _owbleScan.boards)
-            {
-                name[i] = kvp.Key;
-                address[i++] = kvp.Value;
+            lock (_owbleScan.boards)
+            { 
+                _boardMacPreference.SetEntries(_owbleScan.boards.Keys.ToArray());
+                _boardMacPreference.SetEntryValues(_owbleScan.boards.Values.ToArray());
             }
-
-            _boardMacPreference.SetEntries(name);
-            _boardMacPreference.SetEntryValues(address);
-
         }
         private void BoardMacPreference_PreferenceClick(object sender, Preference.PreferenceClickEventArgs e)
         {

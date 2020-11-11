@@ -17,11 +17,12 @@ BLE communication is based on work by @beeradmoore in [OWCE](https://github.com/
 - Customizable Speed Warning - with visual and vibration when exeeding the set limit
 - Speed (text+gauge)
 - Trip distance
-- Amp hours used (shows "Usage"-"Regen" in one field to save screen estate) 
+- Amp hours used (shows "Usage" with "Regen" subtracted in one field to save screen estate) 
 - Battery
 - Voltage
 - Ride mode
 - Pitch/Roll/Yaw
+- Battery/Controller/Motor temperatur
 - Cell voltage
 
 ![Screenshot1](https://github.com/hammer-is/OneWear/blob/main/OWscreen1.png) ![Screenshot2](https://github.com/hammer-is/OneWear/blob/main/OWscreen2.png)
