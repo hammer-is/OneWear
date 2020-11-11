@@ -18,16 +18,19 @@ namespace OneWear
 
         public override Drawable GetItemDrawable(int pos)
         {
+            Drawable drawable = null;
             switch (pos)
             {
                 case 0:
+                    drawable = _context.GetDrawable(Resource.Drawable.ic_settings_black_18dp);
                     break;
                 case 1:
+                    drawable = _context.GetDrawable(Resource.Drawable.ic_speed_black_18dp);
                     break;
                 case 2:
+                    drawable = _context.GetDrawable(Resource.Drawable.ic_child_care_black_18dp);
                     break;
             }
-            Drawable drawable = _context.GetDrawable(Resource.Drawable.ic_cc_checkmark);
             return drawable;
         }
 
