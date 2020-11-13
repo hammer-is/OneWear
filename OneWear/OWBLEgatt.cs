@@ -351,7 +351,8 @@ namespace OneWear
 
                 ((MainActivity)Platform.CurrentActivity).board.ClearValues();
 
-                //_bluetoothGatt.Disconnect(); //= cancelOpen() in log. Sometimes! triggers OnConnectionStateChange() ProfileState.Disconnected
+                _bluetoothGatt.Disconnect(); //= cancelOpen() in log. Does not trigger OnConnectionStateChange() with "ProfileState.Disconnected". 
+                //Without the .Disconnect() it seems a new ConnectGatt/DiscoverServices/ReadValue will not be successfull until Android senses a disconnect by itself and calls OnConnectionStateChange() with "ProfileState.Disconnected"
                 _bluetoothGatt.Close();
                 // If connect is still in progress (code executed in OnServicesDiscovered() ) - exceptions occur in Java code. Probably can also be triggered if IdleTimer is writing (but more difficult to hit). They seem harmleess.
                 // 11-06 12:49:24.993 W/BluetoothGatt( 3243): Unhandled exception in callback
@@ -468,17 +469,6 @@ namespace OneWear
             if (!_characteristicChanged) //broken communication due to disconnect or other issue. 
             {    //NOTE/TODO: This only detects if there are "blocked" SubscribeValue - not ReadValue+WriteValue
 
-                /*  This continues to trigger until Android senses the disconnect.
-                 
-                    [0:] WatchdogTimer !_characteristicChanged
-                    [0:] Connected owXXXXXX
-                    [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
-                    [0:] WatchdogTimer !_characteristicChanged
-                    [0:] Connected owXXXXXX
-                    [0:] ReadValue: E659F318-EA98-11E3-AC10-0800200C9A66
-                    [0:] Disconnected owXXXXXX
-                    [0:] WatchdogTimer !_characteristicChanged 
-                */
                 System.Diagnostics.Debug.WriteLine("WatchdogTimer !_characteristicChanged");
                 Connect(_address);
             }
@@ -500,7 +490,7 @@ namespace OneWear
             _idleTimer.Elapsed += new System.Timers.ElapsedEventHandler(IdleTimer);
 
             _watchdogTimer = new System.Timers.Timer();
-            _watchdogTimer.Interval = 5000; //Seems to work even as low as 1000
+            _watchdogTimer.Interval = 5000; //Seems to work even as low as 1000. But setting low seems to trigger unnecessary reconnect attempts.
             _watchdogTimer.Elapsed += new System.Timers.ElapsedEventHandler(WatchdogTimer);
         }
 
