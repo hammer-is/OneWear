@@ -9,6 +9,9 @@ namespace OneWear
 {
     public class DiagFragment : AndroidX.Fragment.App.Fragment
     {
+#if DEBUG
+        private TextView _debugTextView;
+#endif
         private System.Timers.Timer _uiUpdate;
         private TextView _rideModeTextView, _pryTextView, _tempTextView, _cell1TextView, _cell2TextView, _cell3TextView, _cell4TextView;
         private View _diagView;
@@ -21,7 +24,9 @@ namespace OneWear
         public override View OnCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
         {
             _diagView = inflater.Inflate(Resource.Layout.fragment_diag, container, false);
-
+#if DEBUG
+            _debugTextView = _diagView.FindViewById<TextView>(Resource.Id.debugTextView);
+#endif
             _rideModeTextView = _diagView.FindViewById<TextView>(Resource.Id.rideModeTextView);
             _pryTextView = _diagView.FindViewById<TextView>(Resource.Id.pryTextView);
             _tempTextView = _diagView.FindViewById<TextView>(Resource.Id.tempTextView);
@@ -47,6 +52,9 @@ namespace OneWear
             string text1, text2, text3, text4;
             float voltage;
 
+#if DEBUG
+            mainActivity.RunOnUiThread(() => _debugTextView.Text = String.Format("{0}/{1}/{2}/{3}", mainActivity.oWBLE.DebugConnectBegin, mainActivity.oWBLE.DebugConnected, mainActivity.oWBLE.DebugDisconnected, mainActivity.oWBLE.DebugConnectEnd));
+#endif
             mainActivity.RunOnUiThread(() => _rideModeTextView.Text = String.Format("Mode: {0}", mainActivity.board.RideMode));
             mainActivity.RunOnUiThread(() => _pryTextView.Text = String.Format("P/R/Y: {0:0.0}/{1:0.0}/{2:0.0}", mainActivity.board.Pitch, mainActivity.board.Roll, mainActivity.board.Yaw));
             mainActivity.RunOnUiThread(() => _tempTextView.Text = String.Format("B/C/M (°{0}): {1:0.0}/{2:0.0}/{3:0.0}", Prefs.UseMetric ? "C" : "F", mainActivity.board.BatteryTemperature, mainActivity.board.ControllerTemperature, mainActivity.board.MotorTemperature));

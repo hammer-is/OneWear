@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xamarin.Essentials;
 
@@ -15,6 +16,17 @@ namespace OneWear
 
     public class OWBLEgatt : BluetoothGattCallback
     {
+#if DEBUG
+        private int _debugConnectBegin;
+        private int _debugConnected;
+        private int _debugDisconnected;
+        private int _debugConnectEnd;
+
+        public int DebugConnectBegin => _debugConnectBegin;
+        public int DebugConnected => _debugConnected;
+        public int DebugDisconnected => _debugDisconnected;
+        public int DebugConnectEnd => _debugConnectEnd;        
+#endif
         private string _name, _address;
         private int _firmwareRevision;
         private int _hardwareRevision;
@@ -147,12 +159,17 @@ namespace OneWear
                 }
                 catch (TaskCanceledException) { return; };
             }
+#if DEBUG
+            Interlocked.Increment(ref _debugConnectEnd);
+#endif
         }
 
         public override void OnConnectionStateChange(BluetoothGatt gatt, GattStatus status, ProfileState newState)
         {
             if (newState == ProfileState.Connected)
             {
+                Interlocked.Increment(ref _debugConnected);
+
                 _name = gatt.Device.Name;
 
                 System.Diagnostics.Debug.WriteLine("Connected " + _name);
@@ -163,7 +180,10 @@ namespace OneWear
                 gatt.DiscoverServices();
             }
             else if (newState == ProfileState.Disconnected) //Don't do anything. Let the watchdog handle disconnects.
+            { 
+                Interlocked.Increment(ref _debugDisconnected);
                 System.Diagnostics.Debug.WriteLine("Disconnected " + _name);
+            }
         }
 
         public override void OnCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, GattStatus status)
@@ -279,6 +299,17 @@ namespace OneWear
 
         public void Connect(string address)
         {
+#if DEBUG
+            if (_address != address)
+            { 
+                Interlocked.Exchange(ref _debugConnectBegin, 1); //1=first Connect()
+                Interlocked.Exchange(ref _debugConnected, 0);
+                Interlocked.Exchange(ref _debugDisconnected, 1); //1=Disconnected when starting
+                Interlocked.Exchange(ref _debugConnectEnd, 0);
+            }
+            else
+                Interlocked.Increment(ref _debugConnectBegin);
+#endif
             Disconnect();
 
             _address = address;
