@@ -9,6 +9,8 @@ Written in C# with [Xamarin](http://www.xamarin.com) using Visual Studio 2019.
 
 BLE communication is based on work by @beeradmoore in [OWCE](https://github.com/OnewheelCommunityEdition/OWCE_App).
 
+[Android Asset Studio](https://github.com/romannurik/AndroidAssetStudio) is used for generating assets.
+
 ## Features
 
 - No phone needed for the ride :smile:
