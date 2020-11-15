@@ -168,8 +168,9 @@ namespace OneWear
         {
             if (newState == ProfileState.Connected)
             {
+#if DEBUG
                 Interlocked.Increment(ref _debugConnected);
-
+#endif
                 _name = gatt.Device.Name;
 
                 System.Diagnostics.Debug.WriteLine("Connected " + _name);
@@ -180,8 +181,10 @@ namespace OneWear
                 gatt.DiscoverServices();
             }
             else if (newState == ProfileState.Disconnected) //Don't do anything. Let the watchdog handle disconnects.
-            { 
+            {
+#if DEBUG
                 Interlocked.Increment(ref _debugDisconnected);
+#endif
                 System.Diagnostics.Debug.WriteLine("Disconnected " + _name);
             }
         }
