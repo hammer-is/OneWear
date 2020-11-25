@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<resources>
+  <dimen name="_layout_top">22dp</dimen>
+  <dimen name="_layout_bottom">22dp</dimen>
+  <dimen name="_layout_left">30dp</dimen>
+  <dimen name="_layout_right">30dp</dimen>
+</resources>

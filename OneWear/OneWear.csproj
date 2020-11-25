@@ -69,6 +69,7 @@
     <Compile Include="Board.cs" />
     <Compile Include="Globals.cs" />
     <Compile Include="Prefs.cs" />
+    <Compile Include="SettingsFragment.cs" />
     <Compile Include="SettingsPreferenceFragment.cs" />
     <Compile Include="OWBLEscan.cs" />
     <Compile Include="MainActivity.cs" />
@@ -105,9 +106,6 @@
   </ItemGroup>
   <ItemGroup>
     <AndroidResource Include="Resources\values\dimens.xml" />
-  </ItemGroup>
-  <ItemGroup>
-    <AndroidResource Include="Resources\values-round\strings.xml" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Resources\menu\" />
@@ -182,6 +180,21 @@
   </ItemGroup>
   <ItemGroup>
     <AndroidResource Include="Resources\drawable\ic_speed_black_18dp.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <AndroidResource Include="Resources\layout\fragment_settings.xml">
+      <SubType>Designer</SubType>
+    </AndroidResource>
+  </ItemGroup>
+  <ItemGroup>
+    <AndroidResource Include="Resources\values-round\dimens.xml">
+      <SubType>Designer</SubType>
+    </AndroidResource>
+  </ItemGroup>
+  <ItemGroup>
+    <AndroidResource Include="Resources\values-notround\dimens.xml">
+      <SubType>Designer</SubType>
+    </AndroidResource>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath)\Xamarin\Android\Xamarin.Android.CSharp.targets" />
 </Project>

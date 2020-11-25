@@ -17,6 +17,7 @@ namespace OneWear
 
         private WearableNavigationDrawerView _wearableNavigationDrawerView;
         private SettingsPreferenceFragment _settingsPreferenceFragment;
+        private SettingsFragment _settingsFragment;
         private SpeedFragment _speedFragment;
         private DiagFragment _diagFragment;
 
@@ -50,6 +51,7 @@ namespace OneWear
             _settingsPreferenceFragment = new SettingsPreferenceFragment();
             _speedFragment = new SpeedFragment();
             _diagFragment = new DiagFragment();
+            _settingsFragment = new SettingsFragment();
 
             //Enable bluetooth...
             /*BluetoothManager manager = Xamarin.Essentials.Platform.CurrentActivity.GetSystemService(Context.BluetoothService) as BluetoothManager;
@@ -66,7 +68,8 @@ namespace OneWear
                 oWBLE.Connect(boardMac);
             }
             else
-                SupportFragmentManager.BeginTransaction().Add(Resource.Id.linearLayout1, _settingsPreferenceFragment).Commit();
+                //SupportFragmentManager.BeginTransaction().Add(Resource.Id.linearLayout1, _settingsPreferenceFragment).Commit();
+                SupportFragmentManager.BeginTransaction().Add(Resource.Id.linearLayout1, _settingsFragment).Commit();
 
             _wearableNavigationDrawerView.Controller.PeekDrawer();
 
@@ -80,7 +83,8 @@ namespace OneWear
             switch (pos)
             {
                 case 0:
-                    SupportFragmentManager.BeginTransaction().Replace(Resource.Id.linearLayout1, _settingsPreferenceFragment).Commit();
+                    //SupportFragmentManager.BeginTransaction().Replace(Resource.Id.linearLayout1, _settingsPreferenceFragment).Commit();
+                    SupportFragmentManager.BeginTransaction().Replace(Resource.Id.linearLayout1, _settingsFragment).Commit();
                     break;
                 case 1:
                     SupportFragmentManager.BeginTransaction().Replace(Resource.Id.linearLayout1, _speedFragment).Commit();
